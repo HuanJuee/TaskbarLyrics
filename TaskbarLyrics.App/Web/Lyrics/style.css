@@ -12,6 +12,7 @@
   --primary-offset-y: 1px;
   --secondary-offset-y: 2px;
   --baseline-offset: 1px;
+  --text-shadow: 0 1px 2px rgba(0, 0, 0, 0.36);
 }
 
 * {
@@ -135,7 +136,7 @@ body {
   padding-bottom: var(--baseline-offset); /* Baseline tweak for descenders */
   letter-spacing: 0.06px;
   transform-origin: left center;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.36);
+  text-shadow: var(--text-shadow);
   overflow: visible;
   will-change: transform, opacity, color; /* GPU Accel hint */
   transition:

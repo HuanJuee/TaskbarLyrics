@@ -150,7 +150,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         IncomingNextLineTextBlock.FontSize = _secondaryLineFontSize;
         ApplyStableLineTrackLayout();
         var fontFamilyText = string.IsNullOrWhiteSpace(settings.FontFamily)
-            ? "SF Pro Display, SF Pro Text, Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI, Microsoft YaHei"
+            ? AppSettings.DefaultFontFamily
             : settings.FontFamily;
         var lyricFontFamily = ResolveFontFamily(fontFamilyText);
         var lyricFontWeight = ResolveFontWeight(settings.FontWeight);
@@ -272,7 +272,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             AttachToTaskbarHost();
             ResetLineTransforms();
         }
-        else if (_isSuspendedForSettings && _timer.IsEnabled)
+        else if (_timer.IsEnabled)
         {
             _timer.Stop();
         }
@@ -997,7 +997,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var stylePayload = new
         {
             fontFamily = string.IsNullOrWhiteSpace(settings.FontFamily)
-                ? "SF Pro Display, SF Pro Text, Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI, Microsoft YaHei"
+                ? AppSettings.DefaultFontFamily
                 : settings.FontFamily,
             fontSize = Math.Clamp(settings.FontSize, 10, 40),
             fontWeight = settings.FontWeight,
@@ -1008,6 +1008,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 : "transparent",
             surfaceShadow = settings.ShowBorder
                 ? "inset 0 0 0 1px rgba(255, 255, 255, 0.16)"
+                : "none",
+            textShadow = settings.ShowTextShadow
+                ? "0 1px 2px rgba(0, 0, 0, 0.36)"
                 : "none"
         };
 
@@ -1179,6 +1182,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
       --secondary-offset-y: 2px;
       --surface-color: transparent;
       --surface-shadow: none;
+      --text-shadow: 0 1px 2px rgba(0, 0, 0, 0.36);
     }
 
     * {
@@ -1298,7 +1302,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
       line-height: 1.12;
       letter-spacing: 0;
       transform-origin: left center;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.36);
+      text-shadow: var(--text-shadow);
       overflow: visible;
       transition:
         opacity 560ms cubic-bezier(0.22, 0.72, 0.24, 1),
@@ -1839,6 +1843,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (payload.surfaceShadow && CSS.supports("box-shadow", payload.surfaceShadow)) {
           root.style.setProperty("--surface-shadow", payload.surfaceShadow);
+        }
+
+        if (payload.textShadow && CSS.supports("text-shadow", payload.textShadow)) {
+          root.style.setProperty("--text-shadow", payload.textShadow);
         }
       }
     };

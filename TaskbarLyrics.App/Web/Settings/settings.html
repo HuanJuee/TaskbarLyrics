@@ -63,7 +63,8 @@
             <label class="form-row"><strong>字号</strong><div class="stepper" data-key="fontSize" data-min="10" data-max="40" data-step="1" data-decimals="0"><button data-step="-1">-</button><input data-key="fontSize" inputmode="decimal"><button data-step="1">+</button></div></label>
             <label class="form-row"><strong>字体</strong><select data-key="fontFamily"></select></label>
             <label class="form-row"><strong>字重</strong><select data-key="fontWeight"><option value="Light">细体</option><option value="Normal">常规</option><option value="Medium">中等</option><option value="SemiBold">半粗体</option><option value="Bold">粗体</option></select></label>
-            <div class="form-row"><strong>文字颜色</strong><div id="colorPicker" class="color-control" role="button" tabindex="0"><span id="colorSwatch" class="swatch"></span><input data-key="foregroundColor" spellcheck="false"><i>✎</i></div></div>
+            <div class="form-row"><strong>文字颜色</strong><div class="color-mode-control"><select data-key="foregroundColorMode"><option value="Dark">深色</option><option value="Light">浅色</option><option value="Custom">自定义</option></select><button id="colorPicker" class="color-control" type="button"><span id="colorSwatch" class="swatch"></span><span id="colorValue">#FFFFFFFF</span><i>✎</i></button></div></div>
+            <label class="row"><span><strong>文字阴影</strong><small>为歌词文字增加轻量阴影，提高复杂背景上的可读性。</small></span><input data-key="showTextShadow" type="checkbox"></label>
           </div>
         </section>
 

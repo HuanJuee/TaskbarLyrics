@@ -1,49 +1,49 @@
-﻿using System.Drawing;
+using System.Drawing;
+using System.Windows;
 using Forms = System.Windows.Forms;
 
 namespace TaskbarLyrics.App;
 
 public sealed class TrayService : IDisposable
 {
+    private readonly Icon _icon;
     private readonly Forms.NotifyIcon _notifyIcon;
+    private TrayMenuWindow? _menuWindow;
 
     public TrayService(Action toggleLyricsWindow, Action openSettings, Action exitApp)
     {
+        _icon = AppIconProvider.LoadTrayIcon();
         _notifyIcon = new Forms.NotifyIcon
         {
             Text = "TaskbarLyrics",
-            Icon = SystemIcons.Application,
-            Visible = true,
-            ContextMenuStrip = BuildMenu(toggleLyricsWindow, openSettings, exitApp)
+            Icon = _icon,
+            Visible = true
         };
 
         _notifyIcon.DoubleClick += (_, _) => toggleLyricsWindow();
+        _notifyIcon.MouseUp += (_, e) =>
+        {
+            if (e.Button == Forms.MouseButtons.Right)
+            {
+                System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+                    ShowMenu(toggleLyricsWindow, openSettings, exitApp));
+            }
+        };
     }
 
     public void Dispose()
     {
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _menuWindow?.Close();
+        _icon.Dispose();
     }
 
-    private static Forms.ContextMenuStrip BuildMenu(Action toggleLyricsWindow, Action openSettings, Action exitApp)
+    private void ShowMenu(Action toggleLyricsWindow, Action openSettings, Action exitApp)
     {
-        var menu = new Forms.ContextMenuStrip();
-
-        var toggleItem = new Forms.ToolStripMenuItem("显示/隐藏歌词");
-        toggleItem.Click += (_, _) => toggleLyricsWindow();
-
-        var settingsItem = new Forms.ToolStripMenuItem("设置");
-        settingsItem.Click += (_, _) => openSettings();
-
-        var exitItem = new Forms.ToolStripMenuItem("退出");
-        exitItem.Click += (_, _) => exitApp();
-
-        menu.Items.Add(toggleItem);
-        menu.Items.Add(settingsItem);
-        menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add(exitItem);
-
-        return menu;
+        _menuWindow?.Close();
+        _menuWindow = new TrayMenuWindow(toggleLyricsWindow, openSettings, exitApp);
+        _menuWindow.Closed += (_, _) => _menuWindow = null;
+        _menuWindow.ShowAtCursor();
     }
 }

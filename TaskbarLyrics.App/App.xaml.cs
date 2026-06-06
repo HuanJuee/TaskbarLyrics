@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using Microsoft.Win32;
 
 namespace TaskbarLyrics.App;
 
@@ -8,8 +9,7 @@ public partial class App : System.Windows.Application
     private SettingsStore? _settingsStore;
     private TrayService? _trayService;
     private SettingsWindow? _settingsWindow;
-    private MainWindow? _mainWindow;
-    private bool _lyricsSuspendedForSettings;
+    private LyricsWindowHost? _lyricsWindowHost;
 
     public AppSettings Settings { get; private set; } = new();
 
@@ -33,22 +33,25 @@ public partial class App : System.Windows.Application
 
         _settingsStore = new SettingsStore(settingsPath);
         Settings = _settingsStore.Load();
+        ApplyStartupForegroundColor(Settings);
 
-        _mainWindow = new MainWindow();
-        MainWindow = _mainWindow;
+        _lyricsWindowHost = new LyricsWindowHost(Settings);
 
         if (Settings.ShowLyricsOnStartup)
         {
-            _mainWindow.Show();
+            _lyricsWindowHost.Show();
         }
         UserWantsLyricsVisible = Settings.ShowLyricsOnStartup;
 
         _trayService = new TrayService(ToggleLyricsWindow, OpenSettingsWindow, ExitApplication);
+        SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         _settingsStore?.Save(Settings);
+        _lyricsWindowHost?.Dispose();
         _trayService?.Dispose();
         base.OnExit(e);
     }
@@ -57,25 +60,102 @@ public partial class App : System.Windows.Application
     {
         Settings = settings;
         _settingsStore?.Save(Settings);
-        _mainWindow?.ApplySettings(Settings);
+        _lyricsWindowHost?.ApplySettings(Settings);
     }
 
-    private void ToggleLyricsWindow()
+    internal static void ApplyStartupForegroundColor(AppSettings settings)
     {
-        if (_mainWindow is null)
+        ApplySystemThemeForegroundColor(settings, migrateLegacyCustomColor: true);
+    }
+
+    internal static bool ApplySystemThemeForegroundColor(AppSettings settings, bool migrateLegacyCustomColor = false)
+    {
+        if (migrateLegacyCustomColor && IsLegacyCustomForeground(settings.ForegroundColor))
+        {
+            settings.ForegroundColorMode = ForegroundColorMode.Custom;
+            return false;
+        }
+
+        if (settings.ForegroundColorMode == ForegroundColorMode.Custom)
+        {
+            return false;
+        }
+
+        var nextMode = IsSystemUsingLightTheme()
+            ? ForegroundColorMode.Dark
+            : ForegroundColorMode.Light;
+        var nextColor = nextMode == ForegroundColorMode.Dark
+            ? AppSettings.DarkForegroundColor
+            : AppSettings.LightForegroundColor;
+
+        var changed = settings.ForegroundColorMode != nextMode ||
+            !string.Equals(settings.ForegroundColor, nextColor, StringComparison.OrdinalIgnoreCase);
+        settings.ForegroundColorMode = nextMode;
+        settings.ForegroundColor = nextColor;
+        return changed;
+    }
+
+    private static bool IsLegacyCustomForeground(string? color)
+    {
+        var normalized = NormalizeColor(color);
+        return !string.Equals(normalized, AppSettings.DarkForegroundColor, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(normalized, AppSettings.LightForegroundColor, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeColor(string? color)
+    {
+        if (string.IsNullOrWhiteSpace(color))
+        {
+            return AppSettings.LightForegroundColor;
+        }
+
+        var trimmed = color.Trim();
+        return trimmed.Length == 7 && trimmed.StartsWith('#')
+            ? $"#FF{trimmed[1..]}"
+            : trimmed;
+    }
+
+    private static bool IsSystemUsingLightTheme()
+    {
+        const string personalizeKey = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+        using var key = Registry.CurrentUser.OpenSubKey(personalizeKey);
+        return key?.GetValue("AppsUseLightTheme") is not int value || value != 0;
+    }
+
+    private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category is not (UserPreferenceCategory.Color or UserPreferenceCategory.General or UserPreferenceCategory.VisualStyle))
         {
             return;
         }
 
-        if (_mainWindow.IsVisible)
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (ApplySystemThemeForegroundColor(Settings))
+            {
+                _settingsStore?.Save(Settings);
+                _lyricsWindowHost?.ApplySettings(Settings);
+                _settingsWindow?.ApplyExternalSettings(Settings.Clone());
+            }
+        });
+    }
+
+    private void ToggleLyricsWindow()
+    {
+        if (_lyricsWindowHost is null)
+        {
+            return;
+        }
+
+        if (_lyricsWindowHost.IsVisible)
         {
             UserWantsLyricsVisible = false;
-            _mainWindow.Hide();
+            _lyricsWindowHost.Hide();
         }
         else
         {
             UserWantsLyricsVisible = true;
-            _mainWindow.Show();
+            _lyricsWindowHost.Show();
         }
     }
 
@@ -97,12 +177,6 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        if (_mainWindow is { IsVisible: true })
-        {
-            _mainWindow.SuspendForSettings();
-            _lyricsSuspendedForSettings = true;
-        }
-
         _settingsWindow = new SettingsWindow(Settings.Clone());
         _settingsWindow.Closed += SettingsWindow_Closed;
         _settingsWindow.Show();
@@ -115,18 +189,12 @@ public partial class App : System.Windows.Application
             _settingsWindow.Closed -= SettingsWindow_Closed;
             _settingsWindow = null;
         }
-
-        if (_lyricsSuspendedForSettings)
-        {
-            _mainWindow?.ResumeAfterSettings();
-            _lyricsSuspendedForSettings = false;
-        }
     }
 
     private void ExitApplication()
     {
         IsExiting = true;
-        _mainWindow?.Close();
+        _lyricsWindowHost?.Close();
         Shutdown();
     }
 }

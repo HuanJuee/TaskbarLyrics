@@ -440,5 +440,9 @@ window.taskbarLyrics = {
     if (payload.secondaryColor && CSS.supports("color", payload.secondaryColor)) {
       root.style.setProperty("--secondary", payload.secondaryColor);
     }
+
+    if (payload.textShadow && CSS.supports("text-shadow", payload.textShadow)) {
+      root.style.setProperty("--text-shadow", payload.textShadow);
+    }
   }
 };

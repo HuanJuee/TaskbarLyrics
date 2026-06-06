@@ -480,6 +480,18 @@ select,
     transform .16s cubic-bezier(.2, .8, .2, 1);
 }
 
+.color-mode-control {
+  width: 280px;
+  display: grid;
+  grid-template-columns: 1fr 136px;
+  gap: 8px;
+}
+
+.color-mode-control select,
+.color-mode-control .color-control {
+  width: 100%;
+}
+
 select {
   padding: 0 12px;
   outline: 0;
@@ -527,8 +539,7 @@ select:focus,
   transform: scale(.94);
 }
 
-.stepper input,
-.color-control input {
+.stepper input {
   min-width: 0;
   width: 100%;
   border: 0;
@@ -547,9 +558,20 @@ select:focus,
   cursor: pointer;
 }
 
-.color-control input {
+.color-control span:not(.swatch) {
+  min-width: 0;
+  overflow: hidden;
+  color: #f8fafc;
+  font-size: 12px;
   text-align: left;
-  pointer-events: auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.color-control:disabled {
+  cursor: default;
+  opacity: .58;
+  transform: none;
 }
 
 .swatch {

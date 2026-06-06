@@ -1,0 +1,155 @@
+using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Threading;
+using System.Runtime.InteropServices;
+using Forms = System.Windows.Forms;
+
+namespace TaskbarLyrics.App;
+
+public partial class TrayMenuWindow : Window
+{
+    private const int GwlExStyle = -20;
+    private const int WsExNoActivate = 0x08000000;
+    private const int WsExToolWindow = 0x00000080;
+    private const int VkLButton = 0x01;
+    private const int VkRButton = 0x02;
+    private const int VkMButton = 0x04;
+    private const byte VkEscape = 0x1B;
+    private const int KeyEventKeyUp = 0x0002;
+
+    private readonly Action _toggleLyricsWindow;
+    private readonly Action _openSettings;
+    private readonly Action _exitApp;
+    private readonly DispatcherTimer _closeTimer;
+    private int _graceTicks = 3;
+
+    public TrayMenuWindow(Action toggleLyricsWindow, Action openSettings, Action exitApp)
+    {
+        InitializeComponent();
+        AppIconProvider.ApplyWindowIcon(this);
+        _toggleLyricsWindow = toggleLyricsWindow;
+        _openSettings = openSettings;
+        _exitApp = exitApp;
+        SourceInitialized += OnSourceInitialized;
+        _closeTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(80)
+        };
+        _closeTimer.Tick += OnCloseTimerTick;
+        Closed += (_, _) => _closeTimer.Stop();
+    }
+
+    public void ShowAtCursor()
+    {
+        var cursor = Forms.Cursor.Position;
+        var screen = Forms.Screen.FromPoint(cursor).WorkingArea;
+        const int gap = 8;
+        var left = cursor.X - Width + 22;
+        var top = cursor.Y - Height - gap;
+
+        if (left < screen.Left + gap)
+        {
+            left = cursor.X - 22;
+        }
+
+        if (top < screen.Top + gap)
+        {
+            top = cursor.Y + gap;
+        }
+
+        Left = Math.Clamp(left, screen.Left + gap, screen.Right - Width - gap);
+        Top = Math.Clamp(top, screen.Top + gap, screen.Bottom - Height - gap);
+        Show();
+        _closeTimer.Start();
+    }
+
+    private void OnSourceInitialized(object? sender, EventArgs e)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var style = GetWindowLong(hwnd, GwlExStyle);
+        _ = SetWindowLong(hwnd, GwlExStyle, style | WsExNoActivate | WsExToolWindow);
+    }
+
+    private void OnCloseTimerTick(object? sender, EventArgs e)
+    {
+        if (_graceTicks > 0)
+        {
+            _graceTicks--;
+            return;
+        }
+
+        if (IsCursorInsideWindow())
+        {
+            return;
+        }
+
+        if (IsMouseButtonPressed())
+        {
+            Close();
+        }
+    }
+
+    private bool IsCursorInsideWindow()
+    {
+        var cursor = Forms.Cursor.Position;
+        var topLeft = PointToScreen(new System.Windows.Point(0, 0));
+        var dpi = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice ?? System.Windows.Media.Matrix.Identity;
+        var width = ActualWidth * dpi.M11;
+        var height = ActualHeight * dpi.M22;
+        return cursor.X >= topLeft.X &&
+            cursor.X <= topLeft.X + width &&
+            cursor.Y >= topLeft.Y &&
+            cursor.Y <= topLeft.Y + height;
+    }
+
+    private void ToggleLyricsButton_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+        DismissTrayOverflow();
+        _toggleLyricsWindow();
+    }
+
+    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+        DismissTrayOverflow();
+        _openSettings();
+    }
+
+    private void ExitButton_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+        DismissTrayOverflow();
+        _exitApp();
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int GetWindowLong(IntPtr hwnd, int index);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int SetWindowLong(IntPtr hwnd, int index, int value);
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int virtualKey);
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte virtualKey, byte scanCode, int flags, UIntPtr extraInfo);
+
+    private static bool IsMouseButtonPressed()
+    {
+        return (GetAsyncKeyState(VkLButton) & 0x8000) != 0 ||
+            (GetAsyncKeyState(VkRButton) & 0x8000) != 0 ||
+            (GetAsyncKeyState(VkMButton) & 0x8000) != 0;
+    }
+
+    private static void DismissTrayOverflow()
+    {
+        keybd_event(VkEscape, 0, 0, UIntPtr.Zero);
+        keybd_event(VkEscape, 0, KeyEventKeyUp, UIntPtr.Zero);
+    }
+}

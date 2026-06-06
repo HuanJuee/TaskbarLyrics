@@ -12,6 +12,11 @@ const sourceIcons = {
   Spotify: "../../Assets/PlayerIcons/spotify.png"
 };
 
+const presetForegroundColors = {
+  Dark: "#FF111827",
+  Light: "#FFFFFFFF"
+};
+
 let state = null;
 let fonts = [];
 let draggedSource = null;
@@ -25,7 +30,12 @@ const bridge = {
 function updateSetting(key, value) {
   if (!state) return;
   state[key] = value;
-  if (key === "foregroundColor") updateSwatch(value);
+  if (key === "foregroundColorMode") updateForegroundMode(value);
+  if (key === "foregroundColor") {
+    state.foregroundColorMode = "Custom";
+    updateSwatch(value);
+    updateColorModeControl();
+  }
   animateSettingFeedback(key);
   bridge.post({ type: "update", key, value });
 }
@@ -54,8 +64,8 @@ function renderFonts() {
 
   for (const font of fonts) {
     const option = document.createElement("option");
-    option.value = font;
-    option.textContent = font;
+    option.value = typeof font === "string" ? font : font.value;
+    option.textContent = typeof font === "string" ? font : font.label;
     select.appendChild(option);
   }
 }
@@ -75,16 +85,35 @@ function renderControls() {
   }
 
   updateSwatch(state.foregroundColor);
+  updateColorModeControl();
 }
 
 function updateSwatch(color) {
   const swatch = document.getElementById("colorSwatch");
   if (!swatch) return;
-  swatch.style.background = normalizeCssColor(color);
+  const normalized = normalizeCssColor(color);
+  swatch.style.background = normalized;
+  const value = document.getElementById("colorValue");
+  if (value) value.textContent = color ?? "";
   swatch.animate(
     [{ transform: "scale(1)" }, { transform: "scale(1.14)" }, { transform: "scale(1)" }],
     { duration: 160, easing: "ease-out" }
   );
+}
+
+function updateForegroundMode(mode) {
+  if (mode in presetForegroundColors) {
+    state.foregroundColor = presetForegroundColors[mode];
+    updateSwatch(state.foregroundColor);
+  }
+  updateColorModeControl();
+}
+
+function updateColorModeControl() {
+  const picker = document.getElementById("colorPicker");
+  if (!picker || !state) return;
+  picker.disabled = state.foregroundColorMode !== "Custom";
+  picker.title = picker.disabled ? "选择自定义后可设置颜色" : "选择自定义颜色";
 }
 
 function normalizeCssColor(color) {
@@ -192,8 +221,14 @@ function setupEvents() {
     });
   });
 
-  document.getElementById("colorPicker")?.addEventListener("click", (event) => {
-    if (event.target.matches("input")) return;
+  document.querySelector('select[data-key="foregroundColorMode"]')?.addEventListener("change", (event) => {
+    if (event.currentTarget.value === "Custom") {
+      bridge.post({ type: "pickColor" });
+    }
+  });
+
+  document.getElementById("colorPicker")?.addEventListener("click", () => {
+    if (state?.foregroundColorMode !== "Custom") return;
     bridge.post({ type: "pickColor" });
   });
 

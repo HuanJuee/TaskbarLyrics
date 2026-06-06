@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Markup;
 using System.Windows.Media;
 using Microsoft.Web.WebView2.Core;
 using TaskbarLyrics.Core.Services;
@@ -17,9 +18,6 @@ namespace TaskbarLyrics.App;
 
 public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 {
-    private const string DefaultFontFamily =
-        "SF Pro Display, SF Pro Text, Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI, Microsoft YaHei";
-
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -32,6 +30,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     public SettingsWindow(AppSettings settings)
     {
         InitializeComponent();
+        AppIconProvider.ApplyWindowIcon(this);
         _settings = settings;
 
         SourceInitialized += SettingsWindow_SourceInitialized;
@@ -125,7 +124,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 SaveSettings();
                 break;
             case "resetDefaults":
-                CopySettings(new AppSettings(), _settings);
+                var defaultSettings = new AppSettings();
+                App.ApplyStartupForegroundColor(defaultSettings);
+                CopySettings(defaultSettings, _settings);
                 SaveSettings();
                 await PushSettingsToWebAsync();
                 break;
@@ -147,8 +148,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         var payload = CreateSettingsPayload();
         var settingsJson = JsonSerializer.Serialize(payload, JsonOptions);
-        var fontsJson = JsonSerializer.Serialize(GetFontFamilies(), JsonOptions);
+        var fontsJson = JsonSerializer.Serialize(GetFontOptions(), JsonOptions);
         await SettingsWebView.ExecuteScriptAsync($"window.settingsApp?.setState({settingsJson}, {fontsJson});");
+    }
+
+    public async void ApplyExternalSettings(AppSettings settings)
+    {
+        CopySettings(settings, _settings);
+        await PushSettingsToWebAsync();
     }
 
     private WebSettingsPayload CreateSettingsPayload()
@@ -163,12 +170,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ShowLyricsOnStartup = _settings.ShowLyricsOnStartup,
             ShowLyricTranslation = _settings.ShowLyricTranslation,
             FontSize = _settings.FontSize,
-            FontFamily = ResolveInstalledFontFamily(_settings.FontFamily) ?? ResolveInstalledFontFamily(DefaultFontFamily) ?? "Microsoft YaHei UI",
+            FontFamily = ResolveInstalledFontFamily(_settings.FontFamily) ?? ResolveInstalledFontFamily(AppSettings.DefaultFontFamily) ?? "Microsoft YaHei UI",
             FontWeight = NormalizeFontWeight(_settings.FontWeight),
+            ForegroundColorMode = _settings.ForegroundColorMode,
             ForegroundColor = _settings.ForegroundColor,
             ShowBackground = _settings.ShowBackground,
             BackgroundOpacity = _settings.BackgroundOpacity,
             ShowBorder = _settings.ShowBorder,
+            ShowTextShadow = _settings.ShowTextShadow,
             WindowWidth = _settings.WindowWidth,
             HorizontalAnchor = _settings.HorizontalAnchor,
             XOffset = _settings.XOffset,
@@ -201,12 +210,39 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         return result;
     }
 
-    private static List<string> GetFontFamilies()
+    private static List<FontOption> GetFontOptions()
     {
         return Fonts.SystemFontFamilies
-            .Select(x => x.Source)
-            .OrderBy(x => x, StringComparer.CurrentCultureIgnoreCase)
+            .Select(x => new FontOption
+            {
+                Value = x.Source,
+                Label = GetLocalizedFontName(x)
+            })
+            .OrderBy(x => x.Label, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
+    }
+
+    private static string GetLocalizedFontName(System.Windows.Media.FontFamily fontFamily)
+    {
+        var languages = new[]
+        {
+            XmlLanguage.GetLanguage("zh-CN"),
+            XmlLanguage.GetLanguage("zh-Hans"),
+            XmlLanguage.GetLanguage(CultureInfo.CurrentUICulture.IetfLanguageTag),
+            XmlLanguage.GetLanguage("en-US")
+        };
+
+        foreach (var language in languages)
+        {
+            if (fontFamily.FamilyNames.TryGetValue(language, out var name) &&
+                !string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+        }
+
+        return fontFamily.FamilyNames.Values.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))
+            ?? fontFamily.Source;
     }
 
     private string? ResolveInstalledFontFamily(string? fontFamily)
@@ -216,9 +252,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return null;
         }
 
-        var installed = GetFontFamilies().ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return fontFamily.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault(installed.Contains);
+        var fonts = GetFontOptions();
+        var byValue = fonts.ToDictionary(x => x.Value, x => x.Value, StringComparer.OrdinalIgnoreCase);
+        var byLabel = fonts
+            .GroupBy(x => x.Label, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.First().Value, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var candidate in fontFamily.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (byValue.TryGetValue(candidate, out var value) ||
+                byLabel.TryGetValue(candidate, out value))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 
     private static string NormalizeFontWeight(string? value)
@@ -268,6 +317,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             case "showBorder":
                 _settings.ShowBorder = ReadBool(element, _settings.ShowBorder);
                 break;
+            case "showTextShadow":
+                _settings.ShowTextShadow = ReadBool(element, _settings.ShowTextShadow);
+                break;
             case "enableSmtcTimelineMonitor":
                 _settings.EnableSmtcTimelineMonitor = ReadBool(element, _settings.EnableSmtcTimelineMonitor);
                 break;
@@ -281,7 +333,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 _settings.FontWeight = NormalizeFontWeight(ReadString(element, _settings.FontWeight));
                 break;
             case "foregroundColor":
+                _settings.ForegroundColorMode = ForegroundColorMode.Custom;
                 _settings.ForegroundColor = NormalizeColor(ReadString(element, _settings.ForegroundColor));
+                break;
+            case "foregroundColorMode":
+                _settings.ForegroundColorMode = ReadForegroundColorMode(element, _settings.ForegroundColorMode);
+                ApplyForegroundColorMode();
                 break;
             case "backgroundOpacity":
                 _settings.BackgroundOpacity = Math.Clamp(ReadDouble(element, _settings.BackgroundOpacity), 0, 1);
@@ -335,8 +392,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _settings.ForegroundColor = $"#FF{dialog.Color.R:X2}{dialog.Color.G:X2}{dialog.Color.B:X2}";
+        _settings.ForegroundColorMode = ForegroundColorMode.Custom;
         SaveSettings();
         await PushSettingsToWebAsync();
+    }
+
+    private void ApplyForegroundColorMode()
+    {
+        _settings.ForegroundColor = _settings.ForegroundColorMode switch
+        {
+            ForegroundColorMode.Dark => AppSettings.DarkForegroundColor,
+            ForegroundColorMode.Light => AppSettings.LightForegroundColor,
+            _ => _settings.ForegroundColor
+        };
     }
 
     private void ClearLyricCache()
@@ -386,13 +454,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (string.IsNullOrWhiteSpace(color))
         {
-            return "#FFFFFFFF";
+            return AppSettings.LightForegroundColor;
         }
 
         var trimmed = color.Trim();
         return trimmed.Length == 7 && trimmed.StartsWith('#')
             ? $"#FF{trimmed[1..]}"
             : trimmed;
+    }
+
+    private static ForegroundColorMode ReadForegroundColorMode(JsonElement element, ForegroundColorMode fallback)
+    {
+        if (element.ValueKind == JsonValueKind.String &&
+            Enum.TryParse<ForegroundColorMode>(element.GetString(), out var stringValue))
+        {
+            return stringValue;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number &&
+            element.TryGetInt32(out var intValue) &&
+            Enum.IsDefined(typeof(ForegroundColorMode), intValue))
+        {
+            return (ForegroundColorMode)intValue;
+        }
+
+        return fallback;
     }
 
     private static bool TryParseMediaColor(string? color, out System.Windows.Media.Color parsedColor)
@@ -431,10 +517,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         target.FontSize = source.FontSize;
         target.FontFamily = source.FontFamily;
         target.FontWeight = source.FontWeight;
+        target.ForegroundColorMode = source.ForegroundColorMode;
         target.ForegroundColor = source.ForegroundColor;
         target.ShowBackground = source.ShowBackground;
         target.BackgroundOpacity = source.BackgroundOpacity;
         target.ShowBorder = source.ShowBorder;
+        target.ShowTextShadow = source.ShowTextShadow;
         target.WindowWidth = source.WindowWidth;
         target.HorizontalAnchor = source.HorizontalAnchor;
         target.XOffset = source.XOffset;
@@ -554,14 +642,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public double FontSize { get; set; }
         public string FontFamily { get; set; } = "";
         public string FontWeight { get; set; } = "";
+        public ForegroundColorMode ForegroundColorMode { get; set; }
         public string ForegroundColor { get; set; } = "";
         public bool ShowBackground { get; set; }
         public double BackgroundOpacity { get; set; }
         public bool ShowBorder { get; set; }
+        public bool ShowTextShadow { get; set; }
         public double WindowWidth { get; set; }
         public LyricsHorizontalAnchor HorizontalAnchor { get; set; }
         public double XOffset { get; set; }
         public double YOffset { get; set; }
         public bool EnableSmtcTimelineMonitor { get; set; }
+    }
+
+    private sealed class FontOption
+    {
+        public string Value { get; set; } = "";
+
+        public string Label { get; set; } = "";
     }
 }

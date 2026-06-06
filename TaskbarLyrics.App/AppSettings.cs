@@ -7,8 +7,23 @@ public enum LyricsHorizontalAnchor
     Right
 }
 
+public enum ForegroundColorMode
+{
+    Dark,
+    Light,
+    Custom
+}
+
 public sealed class AppSettings
 {
+    public const string DefaultFontFamily = "Source Han Sans CN, 思源黑体 CN, Microsoft YaHei UI, Microsoft YaHei";
+
+    public const string DefaultFontWeight = "SemiBold";
+
+    public const string DarkForegroundColor = "#FF111827";
+
+    public const string LightForegroundColor = "#FFFFFFFF";
+
     public List<string> SourceRecognitionOrder { get; set; } = new()
     {
         "QQMusic",
@@ -31,17 +46,21 @@ public sealed class AppSettings
 
     public double FontSize { get; set; } = 14;
 
-    public string FontFamily { get; set; } = "SF Pro Display, SF Pro Text, Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI, Microsoft YaHei";
+    public string FontFamily { get; set; } = DefaultFontFamily;
 
-    public string FontWeight { get; set; } = "Medium";
+    public string FontWeight { get; set; } = DefaultFontWeight;
 
-    public string ForegroundColor { get; set; } = "#FFFFFFFF";
+    public ForegroundColorMode ForegroundColorMode { get; set; } = ForegroundColorMode.Light;
+
+    public string ForegroundColor { get; set; } = LightForegroundColor;
 
     public bool ShowBackground { get; set; } = false;
 
     public double BackgroundOpacity { get; set; } = 0.55;
 
     public bool ShowBorder { get; set; } = false;
+
+    public bool ShowTextShadow { get; set; } = false;
 
     public double WindowWidth { get; set; } = 420;
 
