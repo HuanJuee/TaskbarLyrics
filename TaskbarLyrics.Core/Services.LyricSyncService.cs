@@ -12,9 +12,13 @@ public sealed class LyricSyncService : IDisposable
     private string? _currentTrackId;
     private LyricDocument? _currentDocument;
     private string? _currentLyricSourceApp;
+    private int _lastAcceptedLineIndex = -1;
+    private TimeSpan? _lastAcceptedPosition;
     private bool _isUpdating;
     private CancellationTokenSource? _searchCts;
     private bool _isDisposed;
+    private int _lastEmittedLineIndex = -1;
+    private long _documentLoadedTicks;
 
     public string? CurrentLyricSourceApp => _currentLyricSourceApp;
 
@@ -33,6 +37,8 @@ public sealed class LyricSyncService : IDisposable
             _currentTrackId = null;
             _currentDocument = null;
             _currentLyricSourceApp = null;
+            ResetLineStabilizer();
+            _lastEmittedLineIndex = -1;
             return Task.FromResult(new LyricDisplayFrame("", "", "", 0, -1));
         }
 
@@ -43,6 +49,8 @@ public sealed class LyricSyncService : IDisposable
             _currentTrackId = trackId;
             _currentDocument = null;
             _currentLyricSourceApp = null;
+            ResetLineStabilizer();
+            _lastEmittedLineIndex = -1;
             _ = UpdateLyricsAsync(snapshot.Track, trackId);
         }
 
@@ -67,7 +75,29 @@ public sealed class LyricSyncService : IDisposable
             else break;
         }
 
-        if (currentIdx == -1)
+        // Grace period: for the first 300ms after lyrics load, SMTC position
+        // is often stale or over-extrapolated (residual from the previous track).
+        // Force lineIndex to 0 to avoid showing the wrong starting line.
+        var msSinceLoad = Environment.TickCount64 - _documentLoadedTicks;
+        if (msSinceLoad < 300 && _lastEmittedLineIndex < 0)
+        {
+            currentIdx = currentIdx < 0 ? -1 : 0;
+        }
+
+        // Monotonic guard: prevent backward index jumps caused by
+        // SMTC timeline extrapolation oscillation within the same track.
+        if (currentIdx >= 0 && currentIdx < _lastEmittedLineIndex)
+        {
+            currentIdx = _lastEmittedLineIndex;
+        }
+        if (currentIdx >= 0)
+        {
+            _lastEmittedLineIndex = currentIdx;
+        }
+
+        var displayIdx = StabilizeLineIndex(position, currentIdx < 0 ? 0 : currentIdx);
+
+        if (displayIdx == 0 && currentIdx == -1)
         {
             // If before first line, show the first line as prepared current
             var firstLine = lines[0];
@@ -86,8 +116,8 @@ public sealed class LyricSyncService : IDisposable
             return Task.FromResult(new LyricDisplayFrame(firstText, nextTxt, _currentTrack?.Title ?? "", 0, 0));
         }
 
-        var currentLine = lines[currentIdx];
-        var nextLine = (currentIdx + 1 < lines.Count) ? lines[currentIdx + 1] : null;
+        var currentLine = lines[displayIdx];
+        var nextLine = (displayIdx + 1 < lines.Count) ? lines[displayIdx + 1] : null;
 
         // Smart text merging: if translation exists, append it.
         // This ensures the "NextLine" correctly shows the next lyric for animation,
@@ -122,7 +152,7 @@ public sealed class LyricSyncService : IDisposable
             nextText,
             _currentTrack?.Title ?? "",
             progress,
-            currentIdx
+            displayIdx
         ));
     }
 
@@ -151,6 +181,9 @@ public sealed class LyricSyncService : IDisposable
             {
                 _currentDocument = bestResult.Document;
                 _currentLyricSourceApp = bestResult.SourceApp;
+                _documentLoadedTicks = Environment.TickCount64;
+                ResetLineStabilizer();
+                _lastEmittedLineIndex = -1;
             }
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -171,12 +204,54 @@ public sealed class LyricSyncService : IDisposable
 
     private static string BuildTrackIdentity(TrackInfo track)
     {
-        return $"{track.Id}|{track.SourceApp}|{track.Title}|{track.Artist}|{track.SongId}|{track.Duration.TotalMilliseconds:F0}";
+        // SMTC metadata can arrive in waves: SongId and Duration are often filled
+        // or corrected after lyrics have already loaded. They should not reset the
+        // lyric document for the same visible song.
+        return $"{NormalizeIdentityPart(track.SourceApp)}|{NormalizeIdentityPart(track.Title)}|{NormalizeIdentityPart(track.Artist)}";
+    }
+
+    private static string NormalizeIdentityPart(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().ToUpperInvariant();
     }
 
     private bool CanShowTranslation()
     {
         return _shouldShowTranslation(_currentLyricSourceApp);
+    }
+
+    private int StabilizeLineIndex(TimeSpan position, int candidateIndex)
+    {
+        const int jitterBackToleranceMs = 1200;
+
+        var acceptedIndex = candidateIndex;
+        if (_lastAcceptedLineIndex >= 0 &&
+            candidateIndex < _lastAcceptedLineIndex &&
+            _lastAcceptedPosition.HasValue &&
+            position >= _lastAcceptedPosition.Value - TimeSpan.FromMilliseconds(jitterBackToleranceMs))
+        {
+            acceptedIndex = _lastAcceptedLineIndex;
+        }
+
+        _lastAcceptedLineIndex = acceptedIndex;
+        if (!_lastAcceptedPosition.HasValue || position > _lastAcceptedPosition.Value)
+        {
+            _lastAcceptedPosition = position;
+        }
+        else if (acceptedIndex == candidateIndex)
+        {
+            _lastAcceptedPosition = position;
+        }
+
+        return acceptedIndex;
+    }
+
+    private void ResetLineStabilizer()
+    {
+        _lastAcceptedLineIndex = -1;
+        _lastAcceptedPosition = null;
     }
 
     private void CancelPendingSearch()

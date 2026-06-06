@@ -22,6 +22,7 @@ let isTransitioning = false;
 let queuedFrame = null;
 let transitionFallbackTimer = 0;
 let transitionOpacityAnimation = 0;
+let transitionGeneration = 0;
 let transitionStartTime = 0;
 let transitionBaseNextOpacity = 0.72;
 let transitionBaseNextScale = 0.923;
@@ -132,6 +133,7 @@ function stopTransitionOpacityAnimation() {
 }
 
 function resetForTrackSwitch(safeCurrent, safeNext, progress, currentLineIndex, trackId) {
+  transitionGeneration++;
   stopTransitionOpacityAnimation();
   if (transitionFallbackTimer) {
     window.clearTimeout(transitionFallbackTimer);
@@ -201,8 +203,18 @@ function applyFrame(safeCurrent, safeNext, progress, currentLineIndex) {
     }
 
     if (currentLineIndex !== lastCurrentLineIndex) {
+      // Defensive guard: ignore backward index changes caused by
+      // SMTC timeline extrapolation oscillation. Only forward transitions
+      // (increasing index) should trigger scroll animations.
+      if (currentLineIndex < lastCurrentLineIndex) {
+        lastLineProgress = p;
+        return;
+      }
       startTransition(safeCurrent, safeNext, p, currentLineIndex);
     } else {
+      if (safeCurrent !== displayedCurrent) {
+        setCurrentLine(safeCurrent);
+      }
       setSecondaryLine(safeNext);
       updateSecondaryOpacity(p);
     }
@@ -303,6 +315,7 @@ function startTransition(newCurrent, newNext, progress, currentLineIndex = -1) {
   }
 
   isTransitioning = true;
+  const generation = ++transitionGeneration;
   const promoted = toDisplayLine(newCurrent, "Waiting for lyrics...");
   const upcoming = toDisplayLine(newNext, " ");
   transitionBaseNextOpacity = secondaryOpacity;
@@ -336,6 +349,10 @@ function startTransition(newCurrent, newNext, progress, currentLineIndex = -1) {
     }
 
     trackEl.removeEventListener("transitionend", onTransitionEnd);
+    if (generation !== transitionGeneration) {
+      return;
+    }
+
     if (transitionFallbackTimer) {
       window.clearTimeout(transitionFallbackTimer);
       transitionFallbackTimer = 0;
@@ -345,15 +362,27 @@ function startTransition(newCurrent, newNext, progress, currentLineIndex = -1) {
 
   trackEl.addEventListener("transitionend", onTransitionEnd);
   window.requestAnimationFrame(() => {
+    if (generation !== transitionGeneration) {
+      return;
+    }
+
     transitionStartTime = window.performance.now();
     transitionOpacityAnimation = window.requestAnimationFrame(runTransitionOpacityAnimation);
     currentLineEl.classList.add("leaving");
     nextLineEl.classList.add("promoting");
     trackEl.classList.add("animating");
-    window.requestAnimationFrame(() => setTrackOffset(1));
+    window.requestAnimationFrame(() => {
+      if (generation === transitionGeneration) {
+        setTrackOffset(1);
+      }
+    });
   });
   transitionFallbackTimer = window.setTimeout(() => {
     trackEl.removeEventListener("transitionend", onTransitionEnd);
+    if (generation !== transitionGeneration) {
+      return;
+    }
+
     finalizeTransition(promoted, upcoming, progress, currentLineIndex);
   }, transitionDurationMs + 120);
 }

@@ -1397,6 +1397,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     let queuedFrame = null;
     let transitionFallbackTimer = 0;
     let transitionOpacityAnimation = 0;
+    let transitionGeneration = 0;
     let transitionStartTime = 0;
     let transitionBaseNextOpacity = 0.72;
     let transitionBaseNextFontSize = 12;
@@ -1509,6 +1510,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     function resetForTrackSwitch(safeCurrent, safeNext, progress, currentLineIndex, trackId) {
+      transitionGeneration++;
       stopTransitionOpacityAnimation();
       if (transitionFallbackTimer) {
         window.clearTimeout(transitionFallbackTimer);
@@ -1585,6 +1587,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (currentLineIndex !== lastCurrentLineIndex) {
           startTransition(safeCurrent, safeNext, p, currentLineIndex);
         } else {
+          if (safeCurrent !== displayedCurrent) {
+            setCurrentLine(safeCurrent);
+          }
           setSecondaryLine(safeNext);
           updateSecondaryOpacity(p);
         }
@@ -1686,6 +1691,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
       }
 
       isTransitioning = true;
+      const generation = ++transitionGeneration;
       const promoted = toDisplayLine(newCurrent, "正在匹配歌词...");
       const upcoming = toDisplayLine(newNext, " ");
       transitionBaseNextOpacity = secondaryOpacity;
@@ -1717,6 +1723,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         trackEl.removeEventListener("transitionend", onTransitionEnd);
+        if (generation !== transitionGeneration) {
+          return;
+        }
+
         if (transitionFallbackTimer) {
           window.clearTimeout(transitionFallbackTimer);
           transitionFallbackTimer = 0;
@@ -1726,15 +1736,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
       trackEl.addEventListener("transitionend", onTransitionEnd);
       window.requestAnimationFrame(() => {
+        if (generation !== transitionGeneration) {
+          return;
+        }
+
         transitionStartTime = window.performance.now();
         transitionOpacityAnimation = window.requestAnimationFrame(runTransitionOpacityAnimation);
         currentLineEl.classList.add("leaving");
         nextLineEl.classList.add("promoting");
         trackEl.classList.add("animating");
-        window.requestAnimationFrame(() => setTrackOffset(1));
+        window.requestAnimationFrame(() => {
+          if (generation === transitionGeneration) {
+            setTrackOffset(1);
+          }
+        });
       });
       transitionFallbackTimer = window.setTimeout(() => {
         trackEl.removeEventListener("transitionend", onTransitionEnd);
+        if (generation !== transitionGeneration) {
+          return;
+        }
+
         finalizeTransition(promoted, upcoming, progress, currentLineIndex);
       }, transitionDurationMs + 120);
     }
