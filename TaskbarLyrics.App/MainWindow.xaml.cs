@@ -985,9 +985,13 @@ private void OnSourceInitialized(object? sender, EventArgs e)
         {
             return;
         }
+        var settings = (System.Windows.Application.Current as App)?.Settings;
+        var hWndInsertAfter = settings?.ForceAlwaysOnTop == true
+            ? NativeMethods.HWND_TOPMOST
+            : NativeMethods.HWND_TOP;
         NativeMethods.SetWindowPos(
             hwnd,
-            NativeMethods.HWND_TOPMOST,
+            hWndInsertAfter,
             0,
             0,
             0,
