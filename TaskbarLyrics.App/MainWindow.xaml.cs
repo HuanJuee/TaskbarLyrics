@@ -983,12 +983,14 @@ private void OnSourceInitialized(object? sender, EventArgs e)
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero)
         {
-            return;
+        return;
         }
         var settings = (System.Windows.Application.Current as App)?.Settings;
-        var hWndInsertAfter = settings?.ForceAlwaysOnTop == true
-            ? NativeMethods.HWND_TOPMOST
-            : NativeMethods.HWND_TOP;
+        var forceTopmost = settings?.ForceAlwaysOnTop == true;
+        Topmost = forceTopmost;
+        var hWndInsertAfter = forceTopmost
+        ? NativeMethods.HWND_TOPMOST
+        : NativeMethods.HWND_TOP;
         NativeMethods.SetWindowPos(
             hwnd,
             hWndInsertAfter,
