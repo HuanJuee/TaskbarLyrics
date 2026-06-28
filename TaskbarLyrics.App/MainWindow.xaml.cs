@@ -49,6 +49,7 @@ public partial class MainWindow : Window
     private bool _isSpectrumScriptPending;
     private bool _isCurrentFramePureMusic;
     private bool _isCurrentPlaybackPlaying;
+    private bool _forceAlwaysOnTop = true;
     private string? _pendingSpectrumValuesJson;
     private SpectrumTuningSettings _spectrumTuningSettings = SpectrumTuningSettings.CreateDefault();
     private int _lastWebCurrentLineIndex = -1;
@@ -105,6 +106,7 @@ public partial class MainWindow : Window
         }
 
         Width = Math.Clamp(settings.WindowWidth, 320, 1400);
+        _forceAlwaysOnTop = settings.ForceAlwaysOnTop;
         try
         {
             var brush = (Media.Brush?)new Media.BrushConverter().ConvertFromString(settings.ForegroundColor);
@@ -195,17 +197,15 @@ public partial class MainWindow : Window
         _spectrumTimer.Start();
     }
 
-private void OnSourceInitialized(object? sender, EventArgs e)
-{
-    if (PresentationSource.FromVisual(this) is HwndSource source)
+    private void OnSourceInitialized(object? sender, EventArgs e)
     {
-        source.AddHook(WndProc);
-
-        var hwnd = source.Handle;
-        var extendedStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
-        NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, (IntPtr)(extendedStyle.ToInt64() | NativeMethods.WS_EX_TOOLWINDOW));
+        if (PresentationSource.FromVisual(this) is HwndSource source)
+        {
+            source.AddHook(WndProc);
+            ApplyToolWindowStyle(source.Handle);
+            AttachToTaskbarHost();
+        }
     }
-}
 
     private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
@@ -983,14 +983,14 @@ private void OnSourceInitialized(object? sender, EventArgs e)
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero)
         {
-        return;
+            return;
         }
-        var settings = (System.Windows.Application.Current as App)?.Settings;
-        var forceTopmost = settings?.ForceAlwaysOnTop == true;
-        Topmost = forceTopmost;
-        var hWndInsertAfter = forceTopmost
-        ? NativeMethods.HWND_TOPMOST
-        : NativeMethods.HWND_TOP;
+
+        Topmost = _forceAlwaysOnTop;
+        var hWndInsertAfter = _forceAlwaysOnTop
+            ? NativeMethods.HWND_TOPMOST
+            : NativeMethods.HWND_NOTOPMOST;
+
         NativeMethods.SetWindowPos(
             hwnd,
             hWndInsertAfter,
@@ -1004,6 +1004,21 @@ private void OnSourceInitialized(object? sender, EventArgs e)
             NativeMethods.SWP_ASYNCWINDOWPOS |
             NativeMethods.SWP_SHOWWINDOW);
         NativeMethods.ShowWindow(hwnd, NativeMethods.SW_SHOWNOACTIVATE);
+    }
+
+    private static void ApplyToolWindowStyle(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var extendedStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
+        var nextStyle = new IntPtr(extendedStyle.ToInt64() | NativeMethods.WS_EX_TOOLWINDOW);
+        if (nextStyle != extendedStyle)
+        {
+            NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, nextStyle);
+        }
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -1056,6 +1071,7 @@ internal static class NativeMethods
 {
     internal static readonly IntPtr HWND_TOP = IntPtr.Zero;
     internal static readonly IntPtr HWND_TOPMOST = new(-1);
+    internal static readonly IntPtr HWND_NOTOPMOST = new(-2);
     internal const uint SWP_NOSIZE = 0x0001;
     internal const uint SWP_NOMOVE = 0x0002;
     internal const uint SWP_NOACTIVATE = 0x0010;

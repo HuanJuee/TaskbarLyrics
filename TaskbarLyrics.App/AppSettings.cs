@@ -76,7 +76,7 @@ public sealed class AppSettings
 
     public double YOffset { get; set; }
 
-    public bool ForceAlwaysOnTop { get; set; } = false;
+    public bool ForceAlwaysOnTop { get; set; } = true;
 
     // Debug only: show real-time SMTC timeline diagnostics window.
     public bool EnableSmtcTimelineMonitor { get; set; } = false;
