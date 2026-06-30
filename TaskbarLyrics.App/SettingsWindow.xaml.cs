@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.IO;
 using System.Net.Http;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -20,11 +19,6 @@ namespace TaskbarLyrics.App;
 
 public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 {
-    private const string RepositoryUrl = "https://github.com/ANYNC/TaskbarLyrics";
-    private const string ReleasesUrl = "https://github.com/ANYNC/TaskbarLyrics/releases/latest";
-    private const string LatestReleaseApiUrl = "https://api.github.com/repos/ANYNC/TaskbarLyrics/releases/latest";
-    private static readonly HttpClient UpdateHttpClient = new();
-
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -168,8 +162,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 break;
             case "openExternalLink":
                 OpenExternalLink(message.Value.HasValue
-                    ? ReadString(message.Value.Value, RepositoryUrl)
-                    : RepositoryUrl);
+                    ? ReadString(message.Value.Value, UpdateChecker.RepositoryUrl)
+                    : UpdateChecker.RepositoryUrl);
                 break;
         }
     }
@@ -206,8 +200,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             LocalMusicFolders = NormalizeLocalMusicFolders(_settings.LocalMusicFolders),
             ShowLyricsOnStartup = _settings.ShowLyricsOnStartup,
             StartWithWindows = _settings.StartWithWindows,
+            AutoCheckUpdates = _settings.AutoCheckUpdates,
             ShowLyricTranslation = _settings.ShowLyricTranslation,
+            EnableSpectrum = _settings.EnableSpectrum,
             EnablePureMusicSpectrum = _settings.EnablePureMusicSpectrum,
+            ShowSpectrumWhenLyricsNotFound = _settings.ShowSpectrumWhenLyricsNotFound,
             FontSize = _settings.FontSize,
             FontFamily = ResolveInstalledFontFamily(_settings.FontFamily) ?? ResolveInstalledFontFamily(AppSettings.DefaultFontFamily) ?? "Microsoft YaHei UI",
             FontWeight = NormalizeFontWeight(_settings.FontWeight),
@@ -223,8 +220,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             YOffset = _settings.YOffset,
             ForceAlwaysOnTop = _settings.ForceAlwaysOnTop,
             EnableSmtcTimelineMonitor = _settings.EnableSmtcTimelineMonitor,
-            AppVersion = GetAppVersion(),
-            RepositoryUrl = RepositoryUrl
+            AppVersion = UpdateChecker.GetCurrentVersion(),
+            RepositoryUrl = UpdateChecker.RepositoryUrl
         };
     }
 
@@ -376,11 +373,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 _settings.StartWithWindows = ReadBool(element, _settings.StartWithWindows);
                 StartupService.SetEnabled(_settings.StartWithWindows);
                 break;
+            case "autoCheckUpdates":
+                _settings.AutoCheckUpdates = ReadBool(element, _settings.AutoCheckUpdates);
+                break;
             case "showLyricTranslation":
                 _settings.ShowLyricTranslation = ReadBool(element, _settings.ShowLyricTranslation);
                 break;
+            case "enableSpectrum":
+                _settings.EnableSpectrum = ReadBool(element, _settings.EnableSpectrum);
+                break;
             case "enablePureMusicSpectrum":
                 _settings.EnablePureMusicSpectrum = ReadBool(element, _settings.EnablePureMusicSpectrum);
+                break;
+            case "showSpectrumWhenLyricsNotFound":
+                _settings.ShowSpectrumWhenLyricsNotFound = ReadBool(element, _settings.ShowSpectrumWhenLyricsNotFound);
                 break;
             case "showBackground":
                 _settings.ShowBackground = ReadBool(element, _settings.ShowBackground);
@@ -497,17 +503,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseApiUrl);
-            request.Headers.UserAgent.ParseAdd("TaskbarLyrics");
-            using var response = await UpdateHttpClient.SendAsync(request);
-            response.EnsureSuccessStatusCode();
-
-            await using var stream = await response.Content.ReadAsStreamAsync();
-            var release = await JsonSerializer.DeserializeAsync<GitHubRelease>(stream);
-            var latestVersion = NormalizeVersionTag(release?.TagName);
-            var currentVersion = NormalizeVersionTag(GetAppVersion());
-
-            if (string.IsNullOrWhiteSpace(latestVersion))
+            var result = await UpdateChecker.CheckLatestAsync();
+            if (result.State == UpdateCheckState.Error)
             {
                 await PushUpdateStatusToWebAsync(new UpdateStatusPayload
                 {
@@ -517,15 +514,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return;
             }
 
-            var hasUpdate = IsVersionGreater(latestVersion, currentVersion);
             await PushUpdateStatusToWebAsync(new UpdateStatusPayload
             {
-                State = hasUpdate ? "available" : "latest",
-                Message = hasUpdate
-                    ? $"发现新版本 {release?.TagName ?? latestVersion}，当前版本 {GetAppVersion()}。"
-                    : $"当前已是最新版本：{GetAppVersion()}。",
-                Version = release?.TagName ?? latestVersion,
-                Url = string.IsNullOrWhiteSpace(release?.HtmlUrl) ? ReleasesUrl : release.HtmlUrl
+                State = result.HasUpdate ? "available" : "latest",
+                Message = result.HasUpdate
+                    ? $"发现新版本 {result.Version}，当前版本 {result.CurrentVersion}。"
+                    : $"当前已是最新版本：{result.CurrentVersion}。",
+                Version = result.Version,
+                Url = result.Url
             });
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or NotSupportedException)
@@ -561,33 +557,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             UseShellExecute = true
         });
-    }
-
-    private static string GetAppVersion()
-    {
-        var version = Assembly.GetExecutingAssembly()
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion;
-        return (version ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0")
-            .Split('+')[0];
-    }
-
-    private static string NormalizeVersionTag(string? version)
-    {
-        return string.IsNullOrWhiteSpace(version)
-            ? ""
-            : version.Trim().TrimStart('v', 'V');
-    }
-
-    private static bool IsVersionGreater(string latestVersion, string currentVersion)
-    {
-        if (Version.TryParse(latestVersion, out var latest) &&
-            Version.TryParse(currentVersion, out var current))
-        {
-            return latest > current;
-        }
-
-        return string.Compare(latestVersion, currentVersion, StringComparison.OrdinalIgnoreCase) > 0;
     }
 
     private void SaveSettings()
@@ -724,8 +693,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         target.LocalMusicFolders = NormalizeLocalMusicFolders(source.LocalMusicFolders);
         target.ShowLyricsOnStartup = source.ShowLyricsOnStartup;
         target.StartWithWindows = source.StartWithWindows;
+        target.AutoCheckUpdates = source.AutoCheckUpdates;
+        target.LastUpdateCheckUtc = source.LastUpdateCheckUtc;
+        target.LastNotifiedUpdateVersion = source.LastNotifiedUpdateVersion;
         target.ShowLyricTranslation = source.ShowLyricTranslation;
+        target.EnableSpectrum = source.EnableSpectrum;
         target.EnablePureMusicSpectrum = source.EnablePureMusicSpectrum;
+        target.ShowSpectrumWhenLyricsNotFound = source.ShowSpectrumWhenLyricsNotFound;
         target.FontSize = source.FontSize;
         target.FontFamily = source.FontFamily;
         target.FontWeight = source.FontWeight;
@@ -920,8 +894,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public List<string> LocalMusicFolders { get; set; } = new();
         public bool ShowLyricsOnStartup { get; set; }
         public bool StartWithWindows { get; set; }
+        public bool AutoCheckUpdates { get; set; }
         public bool ShowLyricTranslation { get; set; }
+        public bool EnableSpectrum { get; set; }
         public bool EnablePureMusicSpectrum { get; set; }
+        public bool ShowSpectrumWhenLyricsNotFound { get; set; }
         public double FontSize { get; set; }
         public string FontFamily { get; set; } = "";
         public string FontWeight { get; set; } = "";
@@ -950,15 +927,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string Version { get; set; } = "";
 
         public string Url { get; set; } = "";
-    }
-
-    private sealed class GitHubRelease
-    {
-        [JsonPropertyName("tag_name")]
-        public string? TagName { get; set; }
-
-        [JsonPropertyName("html_url")]
-        public string? HtmlUrl { get; set; }
     }
 
     private sealed class FontOption

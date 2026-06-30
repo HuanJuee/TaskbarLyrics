@@ -37,6 +37,7 @@ function updateSetting(key, value) {
     updateSwatch(value);
     updateColorModeControl();
   }
+  if (key === "enableSpectrum") updateSpectrumChildren();
   animateSettingFeedback(key);
   bridge.post({ type: "update", key, value });
 }
@@ -90,6 +91,17 @@ function renderControls() {
 
   updateSwatch(state.foregroundColor);
   updateColorModeControl();
+  updateSpectrumChildren();
+}
+
+function updateSpectrumChildren() {
+  const enabled = Boolean(state?.enableSpectrum);
+  document.querySelectorAll(".spectrum-child").forEach((row) => {
+    row.classList.toggle("disabled", !enabled);
+    row.querySelectorAll("input, select, textarea, button").forEach((control) => {
+      control.disabled = !enabled;
+    });
+  });
 }
 
 function updateSwatch(color) {

@@ -6,7 +6,11 @@ namespace TaskbarLyrics.Core.Utilities;
 
 public static class Log
 {
-    private const long MaxLogFileSizeBytes = 2 * 1024 * 1024;
+    private const long MaxLogFileSizeBytes = 5 * 1024 * 1024;
+    private const int LogRetentionDays = 7;
+    private const string LogsDirectoryName = "Logs";
+    private const string DebugLogFileName = "app_debug.log";
+    private const string ErrorLogFileName = "app_error.log";
     private static bool _isVerboseEnabled;
 
     public enum Level
@@ -26,7 +30,7 @@ public static class Log
 
         try
         {
-            var logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app_debug.log");
+            var logPath = GetDebugLogPath();
             LogFileWriter.AppendLine(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{level.ToString().ToUpper()}] {message}", MaxLogFileSizeBytes);
         }
         catch
@@ -45,6 +49,42 @@ public static class Log
         _isVerboseEnabled = enabled;
     }
 
+    public static void EnsureLogsDirectory()
+    {
+        Directory.CreateDirectory(GetLogsDirectory());
+    }
+
+    public static string GetLogsDirectory()
+    {
+        return Path.Combine(GetApplicationDirectory(), LogsDirectoryName);
+    }
+
+    public static string GetDebugLogPath()
+    {
+        return LogFileWriter.GetActiveLogPath(
+            Path.Combine(GetLogsDirectory(), DebugLogFileName),
+            MaxLogFileSizeBytes,
+            LogRetentionDays);
+    }
+
+    public static string GetErrorLogPath()
+    {
+        return LogFileWriter.GetActiveLogPath(
+            Path.Combine(GetLogsDirectory(), ErrorLogFileName),
+            MaxLogFileSizeBytes,
+            LogRetentionDays);
+    }
+
+    private static string GetApplicationDirectory()
+    {
+        var processPath = Environment.ProcessPath;
+        var processDirectory = string.IsNullOrWhiteSpace(processPath)
+            ? null
+            : Path.GetDirectoryName(processPath);
+        return string.IsNullOrWhiteSpace(processDirectory)
+            ? AppContext.BaseDirectory
+            : processDirectory;
+    }
 }
 
 public static class LogFileWriter
@@ -53,16 +93,136 @@ public static class LogFileWriter
     private static readonly byte[] Utf8Bom = { 0xEF, 0xBB, 0xBF };
     private static readonly object FileLock = new();
 
-    public static void AppendLine(string logPath, string message, long maxFileSizeBytes = 2 * 1024 * 1024)
+    public static string GetActiveLogPath(string logPath, long maxFileSizeBytes = 5 * 1024 * 1024, int retentionDays = 7)
     {
         lock (FileLock)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(logPath) ?? AppDomain.CurrentDomain.BaseDirectory);
-            RotateLegacyEncodingIfNeeded(logPath);
-            TruncateIfNeeded(logPath, maxFileSizeBytes);
-            using var writer = new StreamWriter(logPath, append: true, Utf8WithBom);
+            var logsDirectory = Path.GetDirectoryName(logPath) ?? AppDomain.CurrentDomain.BaseDirectory;
+            Directory.CreateDirectory(logsDirectory);
+            CleanupExpiredLogs(logsDirectory, retentionDays);
+            return ResolveActiveLogPath(logPath, maxFileSizeBytes);
+        }
+    }
+
+    public static void AppendLine(string logPath, string message, long maxFileSizeBytes = 5 * 1024 * 1024, int retentionDays = 7)
+    {
+        lock (FileLock)
+        {
+            var logsDirectory = Path.GetDirectoryName(logPath) ?? AppDomain.CurrentDomain.BaseDirectory;
+            Directory.CreateDirectory(logsDirectory);
+            CleanupExpiredLogs(logsDirectory, retentionDays);
+
+            var activeLogPath = ResolveActiveLogPath(logPath, maxFileSizeBytes);
+            RotateLegacyEncodingIfNeeded(activeLogPath);
+            using var writer = new StreamWriter(activeLogPath, append: true, Utf8WithBom);
             writer.WriteLine(message);
         }
+    }
+
+    private static string ResolveActiveLogPath(string logPath, long maxFileSizeBytes)
+    {
+        var directory = Path.GetDirectoryName(logPath) ?? AppDomain.CurrentDomain.BaseDirectory;
+        var fileName = Path.GetFileName(logPath);
+        var (prefix, date) = GetLogNameParts(fileName);
+        var extension = Path.GetExtension(fileName);
+        var today = DateTime.Now.ToString("yyyy-MM-dd");
+
+        if (!string.Equals(date, today, StringComparison.Ordinal))
+        {
+            date = today;
+        }
+
+        for (var index = 0; index < int.MaxValue; index++)
+        {
+            var suffix = index == 0 ? string.Empty : $".{index}";
+            var candidate = Path.Combine(directory, $"{prefix}-{date}{suffix}{extension}");
+            if (!File.Exists(candidate) || new FileInfo(candidate).Length < maxFileSizeBytes)
+            {
+                return candidate;
+            }
+        }
+
+        throw new IOException("No available log file slot.");
+    }
+
+    private static (string Prefix, string? Date) GetLogNameParts(string fileName)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var dotIndex = stem.LastIndexOf('.');
+        if (dotIndex >= 0 && int.TryParse(stem[(dotIndex + 1)..], out _))
+        {
+            stem = stem[..dotIndex];
+        }
+
+        const int dateLength = 10;
+        if (stem.Length > dateLength &&
+            stem[^dateLength..].Count(c => c == '-') == 2 &&
+            DateTime.TryParseExact(stem[^dateLength..], "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out _))
+        {
+            return (stem[..^dateLength].TrimEnd('-'), stem[^dateLength..]);
+        }
+
+        return (Path.GetFileNameWithoutExtension(fileName), null);
+    }
+
+    private static void CleanupExpiredLogs(string logsDirectory, int retentionDays)
+    {
+        if (retentionDays <= 0)
+        {
+            return;
+        }
+
+        var cutoff = DateTime.Now.Date.AddDays(-retentionDays);
+        foreach (var file in Directory.EnumerateFiles(logsDirectory, "*.log"))
+        {
+            var fileName = Path.GetFileName(file);
+            if (!IsManagedLogFile(fileName, out var logDate) || logDate >= cutoff)
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(file);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private static bool IsManagedLogFile(string fileName, out DateTime logDate)
+    {
+        logDate = default;
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var dotIndex = stem.LastIndexOf('.');
+        if (dotIndex >= 0 && int.TryParse(stem[(dotIndex + 1)..], out _))
+        {
+            stem = stem[..dotIndex];
+        }
+
+        const int dateLength = 10;
+        if (stem.Length <= dateLength)
+        {
+            return false;
+        }
+
+        var prefix = stem[..^dateLength].TrimEnd('-');
+        if (!string.Equals(prefix, "app_debug", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(prefix, "app_error", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return DateTime.TryParseExact(
+            stem[^dateLength..],
+            "yyyy-MM-dd",
+            null,
+            System.Globalization.DateTimeStyles.None,
+            out logDate);
     }
 
     private static void RotateLegacyEncodingIfNeeded(string logPath)
@@ -106,11 +266,4 @@ public static class LogFileWriter
         }
     }
 
-    private static void TruncateIfNeeded(string logPath, long maxFileSizeBytes)
-    {
-        if (File.Exists(logPath) && new FileInfo(logPath).Length >= maxFileSizeBytes)
-        {
-            File.WriteAllText(logPath, string.Empty, Utf8WithBom);
-        }
-    }
 }

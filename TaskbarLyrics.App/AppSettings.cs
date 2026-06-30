@@ -50,9 +50,19 @@ public sealed class AppSettings
 
     public bool StartWithWindows { get; set; } = false;
 
+    public bool AutoCheckUpdates { get; set; } = true;
+
+    public DateTimeOffset? LastUpdateCheckUtc { get; set; }
+
+    public string LastNotifiedUpdateVersion { get; set; } = "";
+
     public bool ShowLyricTranslation { get; set; } = false;
 
+    public bool EnableSpectrum { get; set; } = true;
+
     public bool EnablePureMusicSpectrum { get; set; } = true;
+
+    public bool ShowSpectrumWhenLyricsNotFound { get; set; } = false;
 
     public double FontSize { get; set; } = 14;
 

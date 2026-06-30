@@ -42,7 +42,9 @@ public partial class MainWindow : Window
     private string? _lastLocalCoverLookupTrackId;
     private DateTimeOffset _nextLocalCoverLookupUtc;
     private bool _enableSmtcTimelineMonitor;
+    private bool _enableSpectrum = true;
     private bool _enablePureMusicSpectrum = true;
+    private bool _showSpectrumWhenLyricsNotFound;
     private SmtcTimelineMonitorWindow? _smtcTimelineMonitorWindow;
     private bool _isWebViewReady;
     private bool _isWebViewInitializing;
@@ -61,7 +63,11 @@ public partial class MainWindow : Window
     private object? _lyricsWebViewControl;
     private EventInfo? _lyricsNavigationCompletedEvent;
     private Delegate? _lyricsNavigationCompletedHandler;
-    private DateTimeOffset _nextTickDiagnosticsLogUtc;
+    private string? _lastDiagnosticsTrackId;
+    private bool? _lastDiagnosticsIsPlaying;
+    private string? _lastDiagnosticsLyricSource;
+    private DateTimeOffset _nextSpectrumDiagnosticsLogUtc;
+    private string _lastSpectrumDiagnosticsKey = string.Empty;
 
     public MainWindow()
     {
@@ -142,7 +148,9 @@ public partial class MainWindow : Window
 
         _lyricSyncService.Dispose();
         _lyricSyncService = BuildLyricSyncService(settings);
+        _enableSpectrum = settings.EnableSpectrum;
         _enablePureMusicSpectrum = settings.EnablePureMusicSpectrum;
+        _showSpectrumWhenLyricsNotFound = settings.ShowSpectrumWhenLyricsNotFound;
         AnchorToTaskbar();
         AttachToTaskbarHost();
         PushStyleToWebView(settings);
@@ -341,7 +349,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            var logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app_debug.log");
+            var logPath = Log.GetDebugLogPath();
             LogFileWriter.AppendLine(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}");
         }
         catch {}
@@ -381,7 +389,7 @@ public partial class MainWindow : Window
                 : LyricSyncService.BuildStableTrackIdentity(snapshot.Track);
 
             UpdateLyricLines(current, next, frame.LineProgress);
-            _isCurrentFramePureMusic = frame.IsPureMusic && _enablePureMusicSpectrum;
+            _isCurrentFramePureMusic = ShouldShowSpectrum(frame);
             _isCurrentPlaybackPlaying = snapshot.IsPlaying;
             PushLyricsToWebView(current, next, frame.LineProgress, frame.CurrentLineIndex, _lastWebTrackId, _isCurrentFramePureMusic, snapshot.IsPlaying);
         }
@@ -410,36 +418,120 @@ public partial class MainWindow : Window
         PushSpectrumTuningToWebView(snapshot);
     }
 
+    private bool ShouldShowSpectrum(LyricDisplayFrame frame)
+    {
+        if (!_enableSpectrum)
+        {
+            return false;
+        }
+
+        return (frame.IsPureMusic && _enablePureMusicSpectrum) ||
+            (_showSpectrumWhenLyricsNotFound && IsLyricsNotFoundFrame(frame));
+    }
+
+    private static bool IsLyricsNotFoundFrame(LyricDisplayFrame frame)
+    {
+        return frame.CurrentLineIndex < 0 &&
+            string.Equals(frame.CurrentLine, LyricSyncService.NoLyricsText, StringComparison.Ordinal);
+    }
+
     private void OnSpectrumTimerTick(object? sender, EventArgs e)
     {
         if (!_isCurrentFramePureMusic)
         {
+            PublishSpectrumDiagnostics(SystemAudioSpectrumService.Silence, _audioSpectrumService.GetDiagnostics());
             return;
         }
 
-        PushSpectrumToWebView(_isCurrentPlaybackPlaying && _audioSpectrumService.IsAvailable
+        var captureDiagnostics = _audioSpectrumService.GetDiagnostics();
+        var bars = _isCurrentPlaybackPlaying && captureDiagnostics.IsAvailable
             ? _audioSpectrumService.GetSpectrum()
-            : SystemAudioSpectrumService.Silence);
+            : SystemAudioSpectrumService.Silence;
+
+        PublishSpectrumDiagnostics(bars, captureDiagnostics);
+        PushSpectrumToWebView(bars);
+    }
+
+    private void PublishSpectrumDiagnostics(IReadOnlyList<float> bars, SpectrumCaptureDiagnostics capture)
+    {
+        var outputPeak = bars.Count == 0 ? 0f : bars.Max();
+        var snapshot = new SpectrumDiagnosticsSnapshot(
+            DateTimeOffset.UtcNow,
+            _isCurrentFramePureMusic,
+            _isCurrentPlaybackPlaying,
+            capture.IsAvailable,
+            capture.SampleRate,
+            capture.Channels,
+            capture.Format,
+            capture.InputPeak,
+            outputPeak,
+            capture.LastAudioUtc,
+            capture.LastError);
+
+        SpectrumDiagnosticsState.Update(snapshot);
+        LogSpectrumDiagnostics(snapshot);
+    }
+
+    private void LogSpectrumDiagnostics(SpectrumDiagnosticsSnapshot snapshot)
+    {
+        if (!snapshot.IsPureMusicMode && string.IsNullOrWhiteSpace(snapshot.LastError))
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var key = string.Join("|",
+            snapshot.IsPureMusicMode,
+            snapshot.IsPlaying,
+            snapshot.IsCaptureAvailable,
+            snapshot.SampleRate,
+            snapshot.Channels,
+            snapshot.Format,
+            snapshot.LastError);
+
+        var shouldLog = !string.Equals(key, _lastSpectrumDiagnosticsKey, StringComparison.Ordinal) ||
+                        now >= _nextSpectrumDiagnosticsLogUtc;
+        if (!shouldLog)
+        {
+            return;
+        }
+
+        _lastSpectrumDiagnosticsKey = key;
+        _nextSpectrumDiagnosticsLogUtc = now.AddSeconds(5);
+        LogToFile(
+            $"Spectrum: PureMusic={snapshot.IsPureMusicMode}, Playing={snapshot.IsPlaying}, CaptureAvailable={snapshot.IsCaptureAvailable}, " +
+            $"InputPeak={snapshot.InputPeak:0.0000}, OutputPeak={snapshot.OutputPeak:0.0000}, Format='{snapshot.Format}', " +
+            $"LastAudioUtc='{snapshot.LastAudioUtc:yyyy-MM-dd HH:mm:ss.fff}', Error='{snapshot.LastError}'");
     }
 
     private void LogTickDiagnostics(PlaybackSnapshot snapshot, LyricDisplayFrame frame)
     {
-        if (!_enableSmtcTimelineMonitor || DateTimeOffset.UtcNow < _nextTickDiagnosticsLogUtc)
+        if (!_enableSmtcTimelineMonitor)
         {
             return;
         }
 
-        _nextTickDiagnosticsLogUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+        var trackId = snapshot.Track?.Id;
+        var lyricSource = _lyricSyncService.CurrentLyricSourceApp;
+        var shouldLog =
+            !string.Equals(trackId, _lastDiagnosticsTrackId, StringComparison.Ordinal) ||
+            snapshot.IsPlaying != _lastDiagnosticsIsPlaying ||
+            !string.Equals(lyricSource, _lastDiagnosticsLyricSource, StringComparison.Ordinal);
+        if (!shouldLog)
+        {
+            return;
+        }
+
+        _lastDiagnosticsTrackId = trackId;
+        _lastDiagnosticsIsPlaying = snapshot.IsPlaying;
+        _lastDiagnosticsLyricSource = lyricSource;
         if (snapshot.Track is null)
         {
             LogToFile("SMTC: No active track found (Track is null)");
-        }
-        else
-        {
-            LogToFile($"SMTC: Title='{snapshot.Track.Title}', Artist='{snapshot.Track.Artist}', App='{snapshot.Track.SourceApp}', Playing={snapshot.IsPlaying}, Pos={snapshot.Position}, CoverLen={snapshot.CoverImageBytes?.Length ?? 0}");
+            return;
         }
 
-        LogToFile($"Sync: Current='{frame.CurrentLine}', Next='{frame.NextLine}', Prog={frame.LineProgress:F3}, SourceApp='{_lyricSyncService.CurrentLyricSourceApp}'");
+        LogToFile($"SMTC: Title='{snapshot.Track.Title}', Artist='{snapshot.Track.Artist}', App='{snapshot.Track.SourceApp}', Playing={snapshot.IsPlaying}, Pos={snapshot.Position}, CoverLen={snapshot.CoverImageBytes?.Length ?? 0}, LyricSource='{lyricSource}'");
     }
 
     private void UpdateLyricLines(string current, string next, double lineProgress)

@@ -4,8 +4,7 @@
 **/[Bb]in/
 **/[Oo]bj/
 build/
-build_verify/
-build_verify_single/
+build_verify*/
 publish/
 artifacts/
 

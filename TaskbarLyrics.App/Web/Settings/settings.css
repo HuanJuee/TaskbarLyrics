@@ -436,6 +436,22 @@ small {
   padding: 8px 14px;
 }
 
+.child-row {
+  margin-left: 18px;
+  padding-left: 16px;
+  border-left: 1px solid rgba(148, 163, 184, .2);
+}
+
+.child-row.disabled {
+  opacity: .52;
+}
+
+.compact-row {
+  grid-template-columns: 1fr auto;
+  width: 100%;
+  padding: 0;
+}
+
 strong {
   font-size: 14px;
   font-weight: 640;
@@ -473,6 +489,11 @@ input[type="checkbox"]::after {
 input[type="checkbox"]:checked {
   background: var(--accent);
   border-color: #6b91ff;
+}
+
+input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  filter: grayscale(.2);
 }
 
 input[type="checkbox"]:active {

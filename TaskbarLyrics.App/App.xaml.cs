@@ -1,11 +1,17 @@
 using System.IO;
+using System.Net.Http;
+using System.Text.Json;
 using System.Windows;
 using Microsoft.Win32;
+using TaskbarLyrics.Core.Utilities;
 
 namespace TaskbarLyrics.App;
 
 public partial class App : System.Windows.Application
 {
+    private static readonly TimeSpan AutoUpdateCheckDelay = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan AutoUpdateCheckInterval = TimeSpan.FromDays(1);
+
     private SettingsStore? _settingsStore;
     private TrayService? _trayService;
     private SettingsWindow? _settingsWindow;
@@ -28,6 +34,7 @@ public partial class App : System.Windows.Application
         }
 
         base.OnStartup(e);
+        Log.EnsureLogsDirectory();
         Wpf.Ui.Appearance.ApplicationAccentColorManager.ApplySystemAccent();
 
         // 初始化 SQLite 别名与纯音乐映射库
@@ -58,6 +65,7 @@ public partial class App : System.Windows.Application
         _trayService = new TrayService(ToggleLyricsWindow, OpenSettingsWindow, ExitApplication);
         StartActivationServer();
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+        _ = RunAutomaticUpdateCheckAsync();
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -78,6 +86,49 @@ public partial class App : System.Windows.Application
         Settings = settings;
         _settingsStore?.Save(Settings);
         _lyricsWindowHost?.ApplySettings(Settings);
+    }
+
+    private async Task RunAutomaticUpdateCheckAsync()
+    {
+        if (!Settings.AutoCheckUpdates)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (Settings.LastUpdateCheckUtc is { } lastCheck &&
+            now - lastCheck < AutoUpdateCheckInterval)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.Delay(AutoUpdateCheckDelay);
+            if (IsExiting || !Settings.AutoCheckUpdates)
+            {
+                return;
+            }
+
+            var result = await UpdateChecker.CheckLatestAsync();
+            Settings.LastUpdateCheckUtc = DateTimeOffset.UtcNow;
+
+            if (result.HasUpdate &&
+                !string.Equals(Settings.LastNotifiedUpdateVersion, result.Version, StringComparison.OrdinalIgnoreCase))
+            {
+                Settings.LastNotifiedUpdateVersion = result.Version;
+                _trayService?.ShowNotification(
+                    "TaskbarLyrics 有新版本",
+                    $"发现 {result.Version}，当前版本 {result.CurrentVersion}。可在设置页的关于中打开发布页。");
+            }
+
+            _settingsStore?.Save(Settings);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or NotSupportedException)
+        {
+            Settings.LastUpdateCheckUtc = DateTimeOffset.UtcNow;
+            _settingsStore?.Save(Settings);
+        }
     }
 
     internal static void ApplyStartupForegroundColor(AppSettings settings)

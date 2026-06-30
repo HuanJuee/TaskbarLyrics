@@ -49,6 +49,19 @@
                     Click="ResetButton_Click" />
         </Grid>
 
+        <Border DockPanel.Dock="Top"
+                Margin="0,0,0,12"
+                Padding="10"
+                Background="#1F2937"
+                CornerRadius="6">
+            <TextBlock x:Name="DiagnosticsText"
+                       Text="Spectrum diagnostics: waiting"
+                       FontFamily="Consolas, Microsoft YaHei UI"
+                       FontSize="12"
+                       Foreground="#CBD5E1"
+                       TextWrapping="Wrap" />
+        </Border>
+
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="SlidersPanel" />
         </ScrollViewer>
